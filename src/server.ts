@@ -5,13 +5,15 @@ import {
   ListToolsRequestSchema,
   Tool,
   TextContent,
+  isInitializeRequest
 } from '@modelcontextprotocol/sdk/types.js';
 import sqlite3 from 'sqlite3';
 import axios from 'axios';
 import express from 'express';
 import { randomUUID } from 'node:crypto';
-import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import cors from 'cors';
+import swaggerUi from 'swagger-ui-express';
+import { swaggerSpec } from './swagger.js';
 
 // Database setup
 const db = new sqlite3.Database(':memory:');
@@ -115,6 +117,18 @@ server.oninitialized = () => {
   console.log('MCP Server initialized');
 };
 
+// Add type for error
+interface ErrorWithCode extends Error {
+  code?: string;
+}
+
+// Add type for tool arguments
+interface ToolArguments {
+  query?: string;
+  department?: string;
+  name?: string;
+}
+
 // Set up tool handlers
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
@@ -141,53 +155,62 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
       case 'web_search': {
-        const query = args?.query as string;
+        const args = request.params.arguments as ToolArguments;
+        const query = args?.query;
         if (!query) {
           throw new Error('Query parameter is required');
         }
-        const response = await axios.get(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json`);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(response.data, null, 2),
-            },
-          ],
-        };
+        if (query.length > 500) {
+          throw new Error('Query too long');
+        }
+        try {
+          const response = await axios.get(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json`, {
+            timeout: 5000 // 5 second timeout
+          });
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(response.data, null, 2),
+              },
+            ],
+          };
+        } catch (error) {
+          const err = error as ErrorWithCode;
+          if (err.code === 'ECONNABORTED') {
+            throw new Error('Search request timed out');
+          }
+          throw error;
+        }
       }
       case 'search_employees': {
-        let query = 'SELECT * FROM employees WHERE 1=1';
-        const params: any[] = [];
-        
-        if (args.department) {
-          query += ' AND department = ?';
-          params.push(args.department);
+        const args = request.params.arguments as ToolArguments;
+        const department = args?.department;
+        const name = args?.name;
+        if (!department && !name) {
+          throw new Error('Either department or name parameter is required');
         }
-        if (args.name) {
-          query += ' AND name LIKE ?';
-          params.push(`%${args.name}%`);
-        }
-        
-        const rows = await new Promise((resolve, reject) => {
-          db.all(query, params, (err, rows) => {
-            if (err) reject(err);
-            else resolve(rows);
+        return new Promise((resolve, reject) => {
+          const query = `
+            SELECT * FROM employees 
+            WHERE (? IS NULL OR department = ?)
+            AND (? IS NULL OR name LIKE ?)
+          `;
+          db.all(query, [department, department, name, name ? `%${name}%` : null], (err, rows) => {
+            if (err) {
+              reject(err);
+              return;
+            }
+            resolve({
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(rows, null, 2),
+                },
+              ],
+            });
           });
         });
-        
-        let output = 'Search Results:\n';
-        (rows as any[]).forEach((row) => {
-          output += `ID: ${row.id}, Name: ${row.name}, Department: ${row.department}, Salary: $${row.salary}\n`;
-        });
-        
-        return {
-          content: [
-            {
-              type: 'text',
-              text: output,
-            },
-          ],
-        };
       }
       default:
         throw new Error(`Unknown tool: ${name}`);
@@ -197,6 +220,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     throw error;
   }
 });
+
+// Session management
+const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes
+const sessions: { [sessionId: string]: { lastActive: number; transport: StreamableHTTPServerTransport } } = {};
 
 // Start server
 async function main() {
@@ -212,19 +239,82 @@ async function main() {
     const transports: { [sessionId: string]: StreamableHTTPServerTransport } = {};
 
     // Handle POST requests for client-to-server communication
+    /**
+     * @swagger
+     * /mcp:
+     *   post:
+     *     tags:
+     *       - MCP
+     *     summary: Handle MCP requests
+     *     description: Main endpoint for MCP communication, handling initialization, tool listing, and tool calls
+     *     parameters:
+     *       - in: header
+     *         name: mcp-session-id
+     *         schema:
+     *           type: string
+     *         description: Session ID for existing sessions (not required for initialization)
+     *     requestBody:
+     *       required: true
+     *       content:
+     *         application/json:
+     *           schema:
+     *             oneOf:
+     *               - $ref: '#/components/schemas/InitializeRequest'
+     *               - $ref: '#/components/schemas/ListToolsRequest'
+     *               - $ref: '#/components/schemas/CallToolRequest'
+     *     responses:
+     *       200:
+     *         description: Successful response
+     *         content:
+     *           application/json:
+     *             schema:
+     *               oneOf:
+     *                 - $ref: '#/components/schemas/ToolResponse'
+     *                 - type: object
+     *                   properties:
+     *                     jsonrpc:
+     *                       type: string
+     *                       example: '2.0'
+     *                     result:
+     *                       type: object
+     *                       properties:
+     *                         sessionId:
+     *                           type: string
+     *                         serverInfo:
+     *                           type: object
+     *                           properties:
+     *                             name:
+     *                               type: string
+     *                             version:
+     *                               type: string
+     *                     id:
+     *                       type: [string, number]
+     *       400:
+     *         description: Bad request
+     *         content:
+     *           application/json:
+     *             schema:
+     *               $ref: '#/components/schemas/Error'
+     *       500:
+     *         description: Internal server error
+     *         content:
+     *           application/json:
+     *             schema:
+     *               $ref: '#/components/schemas/Error'
+     */
     app.post('/mcp', async (req, res) => {
       try {
         console.log('Received POST request to /mcp');
         console.log('Request body:', req.body);
         console.log('Request headers:', req.headers);
         
-        // Check for existing session ID
         const sessionId = req.headers['mcp-session-id'] as string | undefined;
         let transport: StreamableHTTPServerTransport;
 
-        if (sessionId && transports[sessionId]) {
+        if (sessionId && sessions[sessionId]) {
           console.log(`Reusing existing transport for session ${sessionId}`);
-          transport = transports[sessionId];
+          transport = sessions[sessionId].transport;
+          sessions[sessionId].lastActive = Date.now();
         } else if (!sessionId && req.body.method === 'initialize') {
           console.log('Creating new transport for initialization request');
           
@@ -237,19 +327,25 @@ async function main() {
             sessionIdGenerator: () => newSessionId,
             onsessioninitialized: (sessionId) => {
               console.log(`Session initialized with ID: ${sessionId}`);
-              transports[sessionId] = transport;
+              sessions[sessionId] = {
+                lastActive: Date.now(),
+                transport
+              };
             }
           });
 
           // Store transport immediately
-          transports[newSessionId] = transport;
+          sessions[newSessionId] = {
+            lastActive: Date.now(),
+            transport
+          };
           console.log(`Stored transport for session ${newSessionId}`);
 
           // Clean up transport when closed
           transport.onclose = () => {
             if (transport.sessionId) {
               console.log(`Cleaning up transport for session ${transport.sessionId}`);
-              delete transports[transport.sessionId];
+              delete sessions[transport.sessionId];
             }
           };
 
@@ -288,21 +384,22 @@ async function main() {
           }
         } else if (sessionId) {
           console.log(`Session ID provided: ${sessionId}`);
-          if (!transports[sessionId]) {
-            console.log('Session ID not found in transports');
+          if (!sessions[sessionId]) {
+            console.log('Session ID not found in sessions');
             if (!res.headersSent) {
               res.status(400).json({
                 jsonrpc: '2.0',
                 error: {
-                  code: -32000,
-                  message: 'Invalid session ID',
+                  code: -32001,
+                  message: 'Invalid session ID'
                 },
-                id: null,
+                id: null
               });
             }
             return;
           }
-          transport = transports[sessionId];
+          transport = sessions[sessionId].transport;
+          sessions[sessionId].lastActive = Date.now();
         } else {
           console.log('Invalid request - no session ID or not an initialization request');
           if (!res.headersSent) {
@@ -425,15 +522,28 @@ async function main() {
                   if (!query) {
                     throw new Error('Query parameter is required');
                   }
-                  const response = await axios.get(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json`);
-                  result = {
-                    content: [
-                      {
-                        type: 'text',
-                        text: JSON.stringify(response.data, null, 2),
-                      },
-                    ],
-                  };
+                  if (query.length > 500) {
+                    throw new Error('Query too long');
+                  }
+                  try {
+                    const response = await axios.get(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json`, {
+                      timeout: 5000 // 5 second timeout
+                    });
+                    result = {
+                      content: [
+                        {
+                          type: 'text',
+                          text: JSON.stringify(response.data, null, 2),
+                        },
+                      ],
+                    };
+                  } catch (error) {
+                    const err = error as ErrorWithCode;
+                    if (err.code === 'ECONNABORTED') {
+                      throw new Error('Search request timed out');
+                    }
+                    throw error;
+                  }
                   break;
                 }
                 case 'search_employees': {
@@ -490,7 +600,7 @@ async function main() {
                   jsonrpc: '2.0',
                   error: {
                     code: -32000,
-                    message: `Error handling call_tool request: ${error.message}`,
+                    message: `Error handling call_tool request: ${error instanceof Error ? error.message : JSON.stringify(error)}`,
                   },
                   id: req.body.id,
                 });
@@ -518,16 +628,15 @@ async function main() {
         }
       } catch (error) {
         console.error('Unexpected error in POST handler:', error);
-        if (!res.headersSent) {
-          res.status(500).json({
-            jsonrpc: '2.0',
-            error: {
-              code: -32000,
-              message: 'Internal server error',
-            },
-            id: null,
-          });
-        }
+        res.status(500).json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32000,
+            message: 'Internal server error',
+            data: error instanceof Error ? error.message : 'Unknown error'
+          },
+          id: null
+        });
       }
     });
 
@@ -536,7 +645,7 @@ async function main() {
       try {
         console.log(`Received ${req.method} request to /mcp`);
         const sessionId = req.headers['mcp-session-id'] as string | undefined;
-        if (!sessionId || !transports[sessionId]) {
+        if (!sessionId || !sessions[sessionId]) {
           console.log('Invalid or missing session ID');
           if (!res.headersSent) {
             res.status(400).send('Invalid or missing session ID');
@@ -544,7 +653,7 @@ async function main() {
           return;
         }
         
-        const transport = transports[sessionId];
+        const transport = sessions[sessionId].transport;
         await transport.handleRequest(req, res);
         console.log(`${req.method} request handled successfully`);
       } catch (error) {
@@ -556,10 +665,63 @@ async function main() {
     };
 
     // Handle GET requests for server-to-client notifications via SSE
+    /**
+     * @swagger
+     * /mcp:
+     *   get:
+     *     tags:
+     *       - MCP
+     *     summary: Server-Sent Events endpoint
+     *     description: Endpoint for server-to-client notifications via SSE. Establishes a persistent connection for real-time updates.
+     *     parameters:
+     *       - in: header
+     *         name: mcp-session-id
+     *         required: true
+     *         schema:
+     *           type: string
+     *         description: Session ID for the SSE connection
+     *     responses:
+     *       200:
+     *         description: SSE connection established
+     *         content:
+     *           text/event-stream:
+     *             schema:
+     *               type: string
+     *       400:
+     *         description: Invalid or missing session ID
+     *       500:
+     *         description: Internal server error
+     */
     app.get('/mcp', handleSessionRequest);
 
     // Handle DELETE requests for session termination
+    /**
+     * @swagger
+     * /mcp:
+     *   delete:
+     *     tags:
+     *       - MCP
+     *     summary: Terminate session
+     *     description: Endpoint for terminating an MCP session. Cleans up session resources and closes any open connections.
+     *     parameters:
+     *       - in: header
+     *         name: mcp-session-id
+     *         required: true
+     *         schema:
+     *           type: string
+     *         description: Session ID to terminate
+     *     responses:
+     *       200:
+     *         description: Session terminated successfully
+     *       400:
+     *         description: Invalid or missing session ID
+     *       500:
+     *         description: Internal server error
+     */
     app.delete('/mcp', handleSessionRequest);
+
+    // Serve Swagger documentation
+    app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
     const PORT = 3000;
     const httpServer = app.listen(PORT, '0.0.0.0', () => {
@@ -588,14 +750,13 @@ async function main() {
     });
 
     // Handle uncaught errors
-    process.on('uncaughtException', (error) => {
-      console.error('Uncaught Exception:', error);
+    process.on('uncaughtException', (err) => {
+      console.error('Uncaught Exception thrown:', err);
       process.exit(1);
     });
 
     process.on('unhandledRejection', (reason, promise) => {
       console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-      process.exit(1);
     });
   } catch (error) {
     console.error('Failed to start server:', error);

@@ -1,0 +1,84 @@
+openapi: 3.0.0
+info:
+  title: MCP Server API
+  version: 1.0.0
+  description: API for the Model Context Protocol (MCP) server implementation
+servers:
+  - url: http://localhost:3000
+    description: Development server
+paths:
+  /mcp:
+    post:
+      summary: Handle MCP requests
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                jsonrpc:
+                  type: string
+                  example: '2.0'
+                method:
+                  type: string
+                  enum: [initialize, list_tools, call_tool]
+                params:
+                  type: object
+                id:
+                  type: [string, number]
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolResponse'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+components:
+  schemas:
+    Error:
+      type: object
+      properties:
+        jsonrpc:
+          type: string
+          example: '2.0'
+        error:
+          type: object
+          properties:
+            code:
+              type: integer
+              example: -32000
+            message:
+              type: string
+              example: Invalid session ID
+        id:
+          type: [string, number, null]
+          example: null
+    ToolResponse:
+      type: object
+      properties:
+        jsonrpc:
+          type: string
+          example: '2.0'
+        result:
+          type: object
+          properties:
+            content:
+              type: array
+              items:
+                type: object
+                properties:
+                  type:
+                    type: string
+                    enum: [text, markdown, code, error, image]
+                  text:
+                    type: string
+        id:
+          type: [string, number]
+          example: 1 
