@@ -1,0 +1,28 @@
+{
+  "name": "mcp-typescript-workshop",
+  "version": "1.0.0",
+  "description": "MCP Server Implementation with TypeScript",
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "NODE_OPTIONS='--loader ts-node/esm' ts-node --esm src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@types/express": "^5.0.2",
+    "axios": "^1.6.7",
+    "express": "^5.1.0",
+    "sqlite3": "^5.1.7"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.24",
+    "@types/sqlite3": "^5.1.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}

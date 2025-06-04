@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>MCP Server Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        #output { white-space: pre-wrap; background: #f5f5f5; padding: 10px; border-radius: 4px; }
+        button { margin: 5px; padding: 8px 16px; }
+    </style>
+</head>
+<body>
+    <h1>MCP Server Test</h1>
+    <div>
+        <button onclick="initialize()">Initialize Session</button>
+        <button onclick="listTools()">List Tools</button>
+        <button onclick="getEmployees()">Get Employees</button>
+        <button onclick="webSearch()">Web Search</button>
+        <button onclick="searchEmployees()">Search Employees</button>
+    </div>
+    <h3>Output:</h3>
+    <div id="output"></div>
+
+    <script>
+        let sessionId = null;
+        const serverUrl = 'http://localhost:3000/mcp';
+
+        function log(message) {
+            const output = document.getElementById('output');
+            output.textContent += message + '\n';
+        }
+
+        async function makeRequest(method, params = {}) {
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+            if (sessionId) {
+                headers['mcp-session-id'] = sessionId;
+            }
+
+            try {
+                const response = await fetch(serverUrl, {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({
+                        jsonrpc: '2.0',
+                        method: method,
+                        params: params,
+                        id: Date.now()
+                    })
+                });
+
+                if (response.headers.get('mcp-session-id')) {
+                    sessionId = response.headers.get('mcp-session-id');
+                    log(`Session ID: ${sessionId}`);
+                }
+
+                const data = await response.json();
+                log(`Response: ${JSON.stringify(data, null, 2)}`);
+                return data;
+            } catch (error) {
+                log(`Error: ${error.message}`);
+            }
+        }
+
+        async function initialize() {
+            log('Initializing session...');
+            await makeRequest('initialize', {});
+        }
+
+        async function listTools() {
+            log('Listing tools...');
+            await makeRequest('list_tools', {});
+        }
+
+        async function getEmployees() {
+            log('Getting employees...');
+            await makeRequest('call_tool', {
+                name: 'get_employees',
+                arguments: {}
+            });
+        }
+
+        async function webSearch() {
+            log('Performing web search...');
+            await makeRequest('call_tool', {
+                name: 'web_search',
+                arguments: {
+                    query: 'TypeScript'
+                }
+            });
+        }
+
+        async function searchEmployees() {
+            log('Searching employees...');
+            await makeRequest('call_tool', {
+                name: 'search_employees',
+                arguments: {
+                    department: 'Engineering'
+                }
+            });
+        }
+    </script>
+</body>
+</html> 
