@@ -62,8 +62,8 @@ The server implements three main tools:
 
 1. Clone the repository:
    ```bash
-   git clone [your-repo-url]
-   cd [repo-name]
+   git clone https://github.com/revhawk/MCP-server-training-typescript.git
+   cd MCP-server-training-typescript
    ```
 
 2. Install dependencies:
@@ -76,32 +76,86 @@ The server implements three main tools:
    npm run dev
    ```
 
-### Example Usage
+### Testing the Server
 
-1. Initialize a session:
+The server can be tested using curl commands. Here's a complete sequence of commands to test all functionality:
+
+1. Initialize a new session:
    ```bash
-   curl -X POST http://localhost:3000/mcp \
+   curl -v -X POST http://localhost:3000/mcp \
      -H "Content-Type: application/json" \
      -H "Accept: application/json, text/event-stream" \
      -d '{"jsonrpc":"2.0","method":"initialize","params":{},"id":1}'
    ```
+   This will return a session ID that you'll need for subsequent requests.
 
 2. List available tools:
    ```bash
-   curl -X POST http://localhost:3000/mcp \
+   curl -v -X POST http://localhost:3000/mcp \
      -H "Content-Type: application/json" \
      -H "Accept: application/json, text/event-stream" \
      -H "mcp-session-id: YOUR_SESSION_ID" \
      -d '{"jsonrpc":"2.0","method":"list_tools","params":{},"id":2}'
    ```
 
-3. Call a tool:
+3. Get all employees:
    ```bash
-   curl -X POST http://localhost:3000/mcp \
+   curl -v -X POST http://localhost:3000/mcp \
      -H "Content-Type: application/json" \
      -H "Accept: application/json, text/event-stream" \
      -H "mcp-session-id: YOUR_SESSION_ID" \
      -d '{"jsonrpc":"2.0","method":"call_tool","params":{"name":"get_employees","arguments":{}},"id":3}'
+   ```
+
+4. Search employees by department:
+   ```bash
+   curl -v -X POST http://localhost:3000/mcp \
+     -H "Content-Type: application/json" \
+     -H "Accept: application/json, text/event-stream" \
+     -H "mcp-session-id: YOUR_SESSION_ID" \
+     -d '{"jsonrpc":"2.0","method":"call_tool","params":{"name":"search_employees","arguments":{"department":"Engineering"}},"id":4}'
+   ```
+
+5. Perform a web search:
+   ```bash
+   curl -v -X POST http://localhost:3000/mcp \
+     -H "Content-Type: application/json" \
+     -H "Accept: application/json, text/event-stream" \
+     -H "mcp-session-id: YOUR_SESSION_ID" \
+     -d '{"jsonrpc":"2.0","method":"call_tool","params":{"name":"web_search","arguments":{"query":"Model Context Protocol"}},"id":5}'
+   ```
+
+Note: Replace `YOUR_SESSION_ID` with the session ID received from the initialize request.
+
+### Expected Responses
+
+1. Initialize response:
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "result": {
+       "sessionId": "e6c389d7-e90a-4d09-a916-47bc5edd365e",
+       "serverInfo": {
+         "name": "workshop-typescript-server",
+         "version": "1.0.0"
+       }
+     },
+     "id": 1
+   }
+   ```
+
+2. Get employees response:
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "result": {
+       "content": [{
+         "type": "text",
+         "text": "Employees:\nID: 1, Name: Alice Johnson, Department: Engineering, Salary: $85000\nID: 2, Name: Bob Smith, Department: Marketing, Salary: $62000\nID: 3, Name: Carol Davis, Department: Engineering, Salary: $92000\nID: 4, Name: David Wilson, Department: Sales, Salary: $58000\n"
+       }]
+     },
+     "id": 3
+   }
    ```
 
 ## Project Structure
